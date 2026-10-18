@@ -1,0 +1,17 @@
+{
+  "name": "torrent2zip",
+  "type": "module",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "webtorrent": "^3.0.21"
+  },
+  "allowScripts": {
+    "node-datachannel@0.32.3": true
+  }
+}
