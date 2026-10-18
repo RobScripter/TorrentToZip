@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Torrent → ZIP</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: radial-gradient(1200px 600px at 50% -10%, #1e293b, #0b1120 60%);
+    color: #e2e8f0; padding: 24px;
+  }
+  .card { width: min(560px, 100%); background: #0f172aee; border: 1px solid #1e293b;
+    border-radius: 18px; padding: 28px; box-shadow: 0 24px 60px #0008; }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  p.sub { margin: 0 0 20px; color: #94a3b8; font-size: 14px; }
+  #drop { border: 2px dashed #334155; border-radius: 14px; padding: 38px 20px;
+    text-align: center; cursor: pointer; transition: .15s; }
+  #drop:hover, #drop.over { border-color: #38bdf8; background: #38bdf810; }
+  #drop strong { color: #38bdf8; }
+  #drop small { display: block; color: #64748b; margin-top: 6px; }
+  input[type=file] { display: none; }
+  .hidden { display: none !important; }
+  .bar { height: 10px; background: #1e293b; border-radius: 99px; overflow: hidden; margin: 18px 0 10px; }
+  .bar > div { height: 100%; width: 0%; background: linear-gradient(90deg, #0ea5e9, #22d3ee); transition: width .3s; }
+  .row { display: flex; justify-content: space-between; font-size: 13px; color: #94a3b8; }
+  .name { font-size: 14px; color: #e2e8f0; margin-bottom: 4px; word-break: break-all; }
+  .btn { display: block; text-align: center; text-decoration: none; margin-top: 18px;
+    padding: 13px; border-radius: 12px; font-weight: 600; color: #04121f;
+    background: linear-gradient(90deg, #22d3ee, #38bdf8); }
+  .btn:hover { filter: brightness(1.1); }
+  .err { color: #f87171; font-size: 13px; margin-top: 12px; }
+</style>
+</head>
+<body>
+  <main class="card">
+    <h1>Torrent → ZIP</h1>
+    <p class="sub">Dépose un fichier <code>.torrent</code>. Le serveur télécharge le contenu puis te renvoie un ZIP.</p>
+
+    <div id="drop">
+      <strong>Choisir un fichier .torrent</strong>
+      <small>ou glisse-le ici</small>
+      <input type="file" id="file" accept=".torrent,application/x-bittorrent">
+    </div>
+
+    <section id="progress" class="hidden">
+      <div class="name" id="name">—</div>
+      <div class="bar"><div id="fill"></div></div>
+      <div class="row">
+        <span id="pct">0 %</span>
+        <span id="meta">—</span>
+      </div>
+    </section>
+
+    <a id="dl" class="btn hidden" href="#">Télécharger le ZIP</a>
+    <div id="err" class="err hidden"></div>
+  </main>
+
+<script>
+const drop = document.getElementById('drop')
+const input = document.getElementById('file')
+const progress = document.getElementById('progress')
+const fill = document.getElementById('fill')
+const pct = document.getElementById('pct')
+const meta = document.getElementById('meta')
+const nameEl = document.getElementById('name')
+const dl = document.getElementById('dl')
+const errEl = document.getElementById('err')
+
+const fmt = (b) => {
+  if (!b) return '0 o'
+  const u = ['o','Ko','Mo','Go','To']; let i = 0
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++ }
+  return b.toFixed(i ? 1 : 0) + ' ' + u[i]
+}
+
+drop.addEventListener('click', () => input.click())
+input.addEventListener('change', () => input.files[0] && handle(input.files[0]))
+;['dragenter','dragover'].forEach(e => drop.addEventListener(e, ev => {
+  ev.preventDefault(); drop.classList.add('over')
+}))
+;['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => {
+  ev.preventDefault(); drop.classList.remove('over')
+}))
+drop.addEventListener('drop', ev => {
+  const f = ev.dataTransfer.files[0]
+  if (f) handle(f)
+})
+
+async function handle(file) {
+  errEl.classList.add('hidden')
+  dl.classList.add('hidden')
+  progress.classList.remove('hidden')
+  nameEl.textContent = file.name
+  fill.style.width = '0%'
+  pct.textContent = '0 %'
+  meta.textContent = 'envoi…'
+
+  const fd = new FormData()
+  fd.append('torrent', file)
+
+  let res, data
+  try {
+    res = await fetch('/api/upload', { method: 'POST', body: fd })
+    data = await res.json()
+  } catch {
+    return fail('Impossible de contacter le serveur.')
+  }
+  if (!res.ok) return fail(data.error || 'Erreur inconnue')
+  watch(data.id)
+}
+
+function watch(id) {
+  const es = new EventSource(`/api/progress/${id}`)
+
+  es.onmessage = (e) => {
+    const s = JSON.parse(e.data)
+
+    if (s.name) nameEl.textContent = s.name
+    const p = Math.round((s.progress || 0) * 100)
+    fill.style.width = p + '%'
+    pct.textContent = p + ' %'
+    meta.textContent = `${fmt(s.downloaded)} / ${fmt(s.length)} · ${fmt(s.speed)}/s · ${s.peers} pair(s)`
+
+    if (s.status === 'ready') {
+      es.close()
+      meta.textContent = `${fmt(s.length)} · ${s.files} fichier(s) · prêt`
+      dl.href = `/api/download/${id}`
+      dl.classList.remove('hidden')
+    }
+    if (s.status === 'error') {
+      es.close()
+      fail(s.error)
+    }
+  }
+  es.onerror = () => es.close()
+}
+
+function fail(msg) {
+  errEl.textContent = msg
+  errEl.classList.remove('hidden')
+  meta.textContent = '—'
+}
+</script>
+</body>
+</html>
